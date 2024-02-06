@@ -1,0 +1,39 @@
+{
+    "language": "Solidity",
+    "sources": {
+        "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol": {
+            "content": "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\n\ninterface AggregatorV3Interface {\n  function decimals() external view returns (uint8);\n\n  function description() external view returns (string memory);\n\n  function version() external view returns (uint256);\n\n  function getRoundData(\n    uint80 _roundId\n  ) external view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound);\n\n  function latestRoundData()\n    external\n    view\n    returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound);\n}\n"
+        },
+        "contracts/FundMe.sol": {
+            "content": "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\n\nimport \"./PriceConverter.sol\";\n\ncontract FundMe {\n    using PriceConverter for uint256; //引入Library PriceConverter到uint\n    uint256 public minimumUsd = 10 * 1e18;\n\n    address[] public funders; //记录捐赠者的地址的数组\n    mapping(address => uint256) public addressToAmountFunded; //映射，地址到数目\n\n    address public owner;\n\n    AggregatorV3Interface public priceFeed;\n\n    constructor(address priceFeedAddress) {\n        owner = msg.sender;\n        priceFeed = AggregatorV3Interface(priceFeedAddress); //这里为什么是重新传递参数priceFeedAddress而不是利用helper-hardhat-config.js里的地址？\n    } //对于pricefeed的地址，我们可以在部署合约的时候传入(参数化设置)，将它保存进一个AggregatorV3Interface类型的全局变量中\n\n    function fund() public payable {\n        require(\n            PriceConverter.getConversionRate(msg.value, priceFeed) >=\n                minimumUsd,\n            \"Didn't send enough!\"\n        );\n        funders.push(msg.sender); //记录地址\n        addressToAmountFunded[msg.sender] = msg.value; //记录映射\n    }\n\n    function withdraw() public onlyOwner {\n        /* starting index, ending index, step amount */\n        for (\n            uint256 funderIndex = 0;\n            funderIndex < funders.length;\n            funderIndex = funderIndex + 1\n        ) {\n            address funder = funders[funderIndex];\n            addressToAmountFunded[funder] = 0;\n        }\n        funders = new address[](0); //重置数组\n        (bool callSuccess, ) = payable(msg.sender).call{\n            value: address(this).balance\n        }(\"\");\n        require(callSuccess, \"Call failed!\");\n    }\n\n    modifier onlyOwner() {\n        require(msg.sender == owner, \"sender is not owner!\");\n        _;\n    }\n\n    receive() external payable {\n        fund();\n    }\n\n    fallback() external payable {\n        fund();\n    }\n}\n"
+        },
+        "contracts/PriceConverter.sol": {
+            "content": "//SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\n\nimport \"@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol\"; //编译一个接口，我们就能引入外部ABI\n\nlibrary PriceConverter {\n    function getPrice(\n        AggregatorV3Interface priceFeed\n    ) internal view returns (uint256) {\n        //ABI\n        //Address 0x694AA1769357215DE4FAC081bf1f309aDC325306\n        // AggregatorV3Interface priceFeed = AggregatorV3Interface(\n        //     0x694AA1769357215DE4FAC081bf1f309aDC325306 //我们在这里使用了硬编码来引入ABI，但是我们可以将其模块化，以便于应对不同的区块链（因为每个区块链对应的pricefeed的ABI都不一样，我们本来需要在合约内部修改，现在只许修改其参数)\n        // );\n\n        (, int256 price, , , ) = priceFeed.latestRoundData(); //pricefeed8位小数\n        return uint(price * 1e10);\n    }\n\n    function getConversionRate(\n        uint256 ethAmount,\n        AggregatorV3Interface priceFeed\n    ) internal view returns (uint256) {\n        uint256 ethprice = getPrice(priceFeed);\n        uint256 ethAmountInUsd = (ethprice * ethAmount) / 1e18;\n        return ethAmountInUsd;\n    }\n\n    // function getVersion(\n    //     AggregatorV3Interface priceFeed\n    // ) internal view returns (uint256) {\n    //     // AggregatorV3Interface priceFeed = AggregatorV3Interface(\n    //     //     0x694AA1769357215DE4FAC081bf1f309aDC325306\n    //     // ); //我们在这里使用了硬编码来引入ABI，但是我们可以将其模块化，以便于应对不同的区块链（因为每个区块链对应的pricefeed的ABI都不一样，我们本来需要在合约内部修改，现在只许修改其参数)\n\n    //     return priceFeed.version();\n    // } 这里是一个例子，我们可以通过ABI来获取pricefeed的版本号，我们不需要它\n}\n"
+        }
+    },
+    "settings": {
+        "optimizer": {
+            "enabled": false,
+            "runs": 200
+        },
+        "outputSelection": {
+            "*": {
+                "*": [
+                    "abi",
+                    "evm.bytecode",
+                    "evm.deployedBytecode",
+                    "evm.methodIdentifiers",
+                    "metadata",
+                    "devdoc",
+                    "userdoc",
+                    "storageLayout",
+                    "evm.gasEstimates"
+                ],
+                "": ["ast"]
+            }
+        },
+        "metadata": {
+            "useLiteralContent": true
+        }
+    }
+}

@@ -1,0 +1,39 @@
+{
+    "language": "Solidity",
+    "sources": {
+        "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol": {
+            "content": "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\n\ninterface AggregatorV3Interface {\n  function decimals() external view returns (uint8);\n\n  function description() external view returns (string memory);\n\n  function version() external view returns (uint256);\n\n  function getRoundData(\n    uint80 _roundId\n  ) external view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound);\n\n  function latestRoundData()\n    external\n    view\n    returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound);\n}\n"
+        },
+        "contracts/FundMe.sol": {
+            "content": "// SPDX-License-Identifier: MIT\n//pragma\npragma solidity ^0.8.0;\n\n//import\nimport \"./PriceConverter.sol\";\n\n//Error codes\nerror FundMe__NotOwner(); //自定义错误类型\n\n//Interfaces, Libraries, Contract\n\n///或者/** */ NatSpec风格注释\n\n/** @title A contract for crowd funding\n *  @author Rocco Zha\n *  @notice You can use this contract for crowd funding\n *  @dev This implements price feeds as our library\n */\n\ncontract FundMe {\n    //Type Declarations\n    using PriceConverter for uint256; //引入Library PriceConverter到uint\n\n    //State Variables\n    uint256 public constant MINIMUM_USD = 10 * 1e18;\n\n    address[] public s_funders; //记录捐赠者的地址的数组\n    mapping(address => uint256) public s_addressToAmountFunded; //映射，地址到数目\n\n    address public immutable i_owner;\n\n    AggregatorV3Interface public s_priceFeed;\n\n    modifier onlyOwner() {\n        //require(msg.sender == i_owner, \"sender is not i_owner!\");\n        if (msg.sender != i_owner) revert FundMe__NotOwner(); //revert回滚交易，报出自定义错误类型FundMe_NotOwner\n        _;\n    }\n\n    constructor(address priceFeedAddress) {\n        i_owner = msg.sender;\n        s_priceFeed = AggregatorV3Interface(priceFeedAddress); //我们将helper-hardhat-config.js中的ethUsdPriceFeed传入01-deploy-fund-me.js的ethUsdPriceFeedAddress中，然后作为参数传入FundMe.sol的构造函数\n    } //对于pricefeed的地址，我们可以在部署合约的时候传入(参数化设置)，将它保存进一个AggregatorV3Interface类型的全局变量中\n\n    receive() external payable {\n        fund();\n    }\n\n    fallback() external payable {\n        fund();\n    }\n\n    /** @notice This function allows you to fund the contract\n     * @dev The contract will only fund if the conversion rate is greater than the MINIMUM_USD\n     */\n\n    function fund() public payable {\n        require(\n            PriceConverter.getConversionRate(msg.value, s_priceFeed) >=\n                MINIMUM_USD,\n            \"Didn't send enough!\"\n        );\n        s_funders.push(msg.sender); //记录地址\n        s_addressToAmountFunded[msg.sender] = msg.value; //记录映射\n    }\n\n    function withdraw() public onlyOwner {\n        /* starting index, ending index, step amount */\n        for (\n            uint256 funderIndex = 0;\n            funderIndex < s_funders.length;\n            funderIndex = funderIndex + 1\n        ) {\n            address funder = s_funders[funderIndex];\n            s_addressToAmountFunded[funder] = 0;\n        }\n        s_funders = new address[](0); //重置数组\n        (bool callSuccess, ) = payable(msg.sender).call{\n            value: address(this).balance\n        }(\"\");\n        require(callSuccess, \"Call failed!\");\n    }\n\n    function cheaperWithdraw() public payable onlyOwner {\n        address[] memory funders = s_funders; //一次性将storage中的s_funders读入memory中，可以节省gas\n        //mapping不能存储于memory中\n        for (\n            uint256 funderIndex = 0;\n            funderIndex < funders.length;\n            funderIndex++\n        ) {\n            address funder = funders[funderIndex];\n            s_addressToAmountFunded[funder] = 0;\n        }\n        s_funders = new address[](0);\n        (bool success, ) = i_owner.call{value: address(this).balance}(\"\");\n        require(success);\n    }\n}\n\n//order of layout\n//1.pragma statements\n//2.Import statements\n//3.interfaces\n//4.library\n//5.contract\n\n//inside contract,library or interface\n//1.Type declarations\n//2.state variables\n//3.events\n//4.modifers\n//5.functions\n\n//不是所有的state variables都需要public，我们可以修改成private或Internal，然后为他们增加一个函数返回其值\n// 例：\n// function getOwner() public view returns (address){\n//     return i_owner;\n// }\n"
+        },
+        "contracts/PriceConverter.sol": {
+            "content": "//SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\n\nimport \"@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol\"; //编译一个接口，我们就能引入外部ABI\n\nlibrary PriceConverter {\n    function getPrice(\n        AggregatorV3Interface priceFeed\n    ) internal view returns (uint256) {\n        //ABI\n        //Address 0x694AA1769357215DE4FAC081bf1f309aDC325306\n        // AggregatorV3Interface priceFeed = AggregatorV3Interface(\n        //     0x694AA1769357215DE4FAC081bf1f309aDC325306 //我们在这里使用了硬编码来引入ABI，但是我们可以将其模块化，以便于应对不同的区块链（因为每个区块链对应的pricefeed的ABI都不一样，我们本来需要在合约内部修改，现在只许修改其参数)\n        // );\n\n        (, int256 price, , , ) = priceFeed.latestRoundData(); //pricefeed8位小数\n        return uint(price * 1e10);\n    }\n\n    function getConversionRate(\n        uint256 ethAmount,\n        AggregatorV3Interface priceFeed\n    ) internal view returns (uint256) {\n        uint256 ethprice = getPrice(priceFeed);\n        uint256 ethAmountInUsd = (ethprice * ethAmount) / 1e18;\n        return ethAmountInUsd;\n    }\n\n    // function getVersion(\n    //     AggregatorV3Interface priceFeed\n    // ) internal view returns (uint256) {\n    //     // AggregatorV3Interface priceFeed = AggregatorV3Interface(\n    //     //     0x694AA1769357215DE4FAC081bf1f309aDC325306\n    //     // ); //我们在这里使用了硬编码来引入ABI，但是我们可以将其模块化，以便于应对不同的区块链（因为每个区块链对应的pricefeed的ABI都不一样，我们本来需要在合约内部修改，现在只许修改其参数)\n\n    //     return priceFeed.version();\n    // } 这里是一个例子，我们可以通过ABI来获取pricefeed的版本号，我们不需要它\n}\n"
+        }
+    },
+    "settings": {
+        "optimizer": {
+            "enabled": false,
+            "runs": 200
+        },
+        "outputSelection": {
+            "*": {
+                "*": [
+                    "abi",
+                    "evm.bytecode",
+                    "evm.deployedBytecode",
+                    "evm.methodIdentifiers",
+                    "metadata",
+                    "devdoc",
+                    "userdoc",
+                    "storageLayout",
+                    "evm.gasEstimates"
+                ],
+                "": ["ast"]
+            }
+        },
+        "metadata": {
+            "useLiteralContent": true
+        }
+    }
+}
